@@ -4,6 +4,7 @@
 
 #[path = "../../linux/src/chores.rs"]
 mod chores;
+mod dock;
 mod kwin;
 #[path = "../../linux/src/light.rs"]
 mod light;

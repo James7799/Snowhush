@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::dock::{self, Docks};
 use crate::log;
 use crate::source::{Demand, Display, Panel, Report, Shared, Window};
 use crate::xlib::{self, Monitor, X};
@@ -28,6 +29,8 @@ const ALL_DESKTOPS: u64 = 0xffff_ffff;
 /// How often GNOME Shell is asked whether its overview (Activities) is open: the overlay is above it, so the
 /// snow must fade out of its way, as it does on niri's overview.
 const OVERVIEW_EVERY: Duration = Duration::from_millis(150);
+/// How often GNOME's dock is asked where it shows: intellihide puts it away and brings it back as windows move.
+const DOCK_EVERY: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -68,6 +71,9 @@ fn run(mut x: X, shared: Arc<Shared>, scale: f64) {
     let bus = zbus::blocking::Connection::session().ok();
     let mut overview = false;
     let mut overview_at: Option<Instant> = None;
+    let mut docks = Docks::default();
+    let mut docks_at: Option<Instant> = None;
+    let mut dock_rects: Vec<dock::Rect> = Vec::new();
     loop {
         let demand = shared.windows_demand();
         let pointer_wanted = shared.pointer_wanted();
@@ -86,6 +92,12 @@ fn run(mut x: X, shared: Arc<Shared>, scale: f64) {
             dirty |= open != overview;
             overview = open;
         }
+        if demand != Demand::Off && docks_at.is_none_or(|at| now - at >= DOCK_EVERY) {
+            docks_at = Some(now);
+            let showing = docks.showing(&monitors);
+            dirty |= showing != dock_rects;
+            dock_rects = showing;
+        }
         let pointer = x.pointer();
         if pointer_wanted && let Some((px, py, _, _)) = pointer {
             shared.set_cursor((px as f64 / scale) as f32, (py as f64 / scale) as f32);
@@ -103,7 +115,7 @@ fn run(mut x: X, shared: Arc<Shared>, scale: f64) {
             monitors = x.monitors();
             monitors_at = now;
         }
-        let mut report = ask(&mut x, &mut known, &monitors, scale);
+        let mut report = ask(&mut x, &mut known, &monitors, scale, &dock_rects);
         report.hidden = overview;
         if pressed && let Some(previous) = &last
             && moved(previous, &report)
@@ -125,13 +137,24 @@ fn moved(before: &Report, after: &Report) -> bool {
     })
 }
 
-fn ask(x: &mut X, known: &mut HashMap<xlib::Window, Known>, monitors: &[Monitor], scale: f64) -> Report {
+fn ask(x: &mut X, known: &mut HashMap<xlib::Window, Known>, monitors: &[Monitor], scale: f64, docks: &[dock::Rect]) -> Report {
     let root = x.root;
     let desktop = x.cardinals(root, "_NET_CURRENT_DESKTOP").and_then(|v| v.first().copied()).unwrap_or(0);
     let stacking = x.cardinals(root, "_NET_CLIENT_LIST_STACKING").unwrap_or_default();
     let gtk_areas = x.cardinals(root, &format!("_GTK_WORKAREAS_D{desktop}")).unwrap_or_default();
     let net_area = x.cardinals(root, "_NET_WORKAREA").unwrap_or_default();
     let l = |v: i64| v as f64 / scale;
+    // A dock showing along a display's bottom is a panel there, which the snow lies on: its top is the work area's
+    // bottom, as a panel's that keeps windows off it would be.
+    let dock_on = |m: &Monitor| {
+        docks.iter().copied().find(|d| d.0 >= m.x - 2 && d.0 + d.2 <= m.x + m.w + 2 && (d.1 + d.3 - (m.y + m.h)).abs() <= 2)
+    };
+    let mut panels: Vec<Panel> = monitors
+        .iter()
+        .filter_map(|m| {
+            dock_on(m).map(|d| Panel { id: format!("dock {}", m.name), x: l(d.0 as i64), y: l(d.1 as i64), w: l(d.2 as i64), h: l(d.3 as i64) })
+        })
+        .collect();
 
     let screens = monitors
         .iter()
@@ -149,7 +172,12 @@ fn ask(x: &mut X, known: &mut HashMap<xlib::Window, Known>, monitors: &[Monitor]
                     (x0, y0, (x1 - x0).max(0), (y1 - y0).max(0))
                 })
             });
-            let (ax, ay, aw, ah) = work.filter(|w| w.2 > 0 && w.3 > 0).unwrap_or((mx, my, mw, mh));
+            let (ax, ay, aw, mut ah) = work.filter(|w| w.2 > 0 && w.3 > 0).unwrap_or((mx, my, mw, mh));
+            if let Some(d) = dock_on(m)
+                && (d.1 as i64) > ay
+            {
+                ah = ah.min(d.1 as i64 - ay);
+            }
             Display { name: m.name.clone(), x: l(mx), y: l(my), w: l(mw), h: l(mh), ax: l(ax), ay: l(ay), aw: l(aw), ah: l(ah) }
         })
         .collect();
@@ -164,7 +192,6 @@ fn ask(x: &mut X, known: &mut HashMap<xlib::Window, Known>, monitors: &[Monitor]
     let listed: HashSet<xlib::Window> = stacking.iter().map(|w| *w as xlib::Window).collect();
     known.retain(|w, _| listed.contains(w));
     let mut windows = Vec::new();
-    let mut panels = Vec::new();
     let mut elsewhere = Vec::new();
     for &id in stacking.iter().rev() {
         let w = id as xlib::Window;

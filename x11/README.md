@@ -18,6 +18,7 @@ The snow physics (`core/`) and every Linux module that does not touch Wayland ar
 | `render.rs` | `linux/src/render.rs` with EGL on the X11 platform, a config whose native visual is 32-bit ARGB, and surfaces on X windows |
 | `source.rs` | `linux/src/source.rs` with the compositor sources swapped for `xsource` |
 | `kwin.rs` | Only the single-instance D-Bus name and the `Slide` type |
+| `dock.rs` | GNOME's dock (Ubuntu Dock, Dash to Dock) from gnome-shell's accessible objects (AT-SPI): each display's dash, which becomes a panel the snow lies on, its top the work area's bottom |
 | `tray.rs` | `linux/src/tray.rs` with **⛄ Build a Snowman** added |
 
 ## Snowmen
@@ -32,7 +33,17 @@ scarf, twig arms and a black top hat. Grabbing a ball under another drops the on
 
 Snowmen and balls stand in the drift (`core/src/simulation/snowballs.rs`, `snowmen.rs`), which lies over the
 windows, so a window does not hide them; Clear Snow takes the balls and knocks the snowmen over. They are drawn
-procedurally, with no pictures (`src/shaders/snowman.frag`, `snowball.frag`). The overlay takes the pointer only
+procedurally, with no pictures (`src/shaders/snowman.frag`, `snowball.frag`). Over the dock they stand in the
+snow lying on it.
+
+## The dock
+
+gnome-shell draws the dock itself, so no X window says where it is, and the shell's input region is the dock's whole
+container, much wider than the bar of icons. Its accessible objects do say: `dock.rs` finds each display's dock
+under the shell's stage on the accessibility bus and asks where its dash is five times a second. A dash showing
+along a display's bottom is reported as a panel, so the snow settles on it as on a KDE panel and falls off when
+intellihide puts the dock away. The dock takes every click over itself, so a ball is scooped from the snow on its
+top, not from the ground behind it. The overlay takes the pointer only
 over the balls, and over the drift while Ctrl is held; everywhere else every click goes through.
 
 Not on X11: Show in Screenshots (the snow always shows in them), and Behind Windows (the overlay is always above

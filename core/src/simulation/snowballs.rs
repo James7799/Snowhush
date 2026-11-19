@@ -72,7 +72,7 @@ impl SnowSimulation {
         if self.snowballs.balls.len() >= MOST {
             return None;
         }
-        let layer = &self.layers[0];
+        let layer = &self.layers[self.standing_layer(point.x, 0.0)];
         let (from, to) = (layer.clamped_index(point.x - SCOOP_REACH), layer.clamped_index(point.x + SCOOP_REACH));
         let deepest = (from..=to).map(|i| layer.surface(i) - layer.floor(i)).fold(0.0, f32::max);
         let top = (from..=to).map(|i| layer.surface(i)).fold(0.0, f32::max);
@@ -184,9 +184,43 @@ impl SnowSimulation {
         (0..layer.count()).map(|i| layer.surface(i)).fold(0.0, f32::max)
     }
 
+    /// Where snow can be scooped up, left, bottom, right, top: the ground's drift, and the snow on a panel's shelf
+    /// (the dock), each up to a little above it.
+    pub fn scoop_boxes(&self, above: f32) -> Vec<[f32; 4]> {
+        let mut boxes = Vec::new();
+        let ground = self.drift_top();
+        if ground > 1.0 {
+            boxes.push([0.0, 0.0, self.width, ground + above]);
+        }
+        if let Some(li) = self.shelf_layer() {
+            let layer = &self.layers[li];
+            let top = (0..layer.count()).map(|i| layer.surface(i)).fold(layer.base().y, f32::max);
+            if top > layer.base().y + 1.0 {
+                boxes.push([layer.base().x, layer.base().y, layer.base().x + layer.width(), top + above]);
+            }
+        }
+        boxes
+    }
+
+    /// The panel's shelf, as a layer, if there is one.
+    pub(super) fn shelf_layer(&self) -> Option<usize> {
+        self.shelf.and_then(|id| self.ids.iter().position(|&other| other == id)).filter(|&li| li < self.layers.len())
+    }
+
+    /// What something `half` wide either side of `x` stands on: the panel's shelf where it runs under it all, as
+    /// Halloween's pumpkins do, else the ground.
+    pub(super) fn standing_layer(&self, x: f32, half: f32) -> usize {
+        self.shelf_layer()
+            .filter(|&li| {
+                let layer = &self.layers[li];
+                layer.base().x <= x - half && layer.base().x + layer.width() >= x + half
+            })
+            .unwrap_or(0)
+    }
+
     /// The drift's surface under a ball of this radius at `x`: the average across its middle.
     fn drift_surface(&self, x: f32, radius: f32) -> f32 {
-        let layer = &self.layers[0];
+        let layer = &self.layers[self.standing_layer(x, radius * 0.5)];
         let (from, to) = (layer.clamped_index(x - radius * 0.5), layer.clamped_index(x + radius * 0.5));
         (from..=to).map(|i| layer.surface(i)).sum::<f32>() / (to - from + 1) as f32
     }
@@ -194,7 +228,8 @@ impl SnowSimulation {
     /// Takes up to `area` square points of snow from the drift within `half` of `x`, evenly as deep as it is;
     /// returns how much it took.
     fn take_drift_snow(&mut self, x: f32, half: f32, area: f32) -> f32 {
-        let layer = &mut self.layers[0];
+        let li = self.standing_layer(x, 0.0);
+        let layer = &mut self.layers[li];
         let width = layer.column_width;
         let (from, to) = (layer.clamped_index(x - half), layer.clamped_index(x + half));
         let depth: f32 = (from..=to).map(|i| (layer.surface(i) - layer.floor(i)).max(0.0)).sum();
@@ -244,6 +279,11 @@ impl SnowSimulation {
                             ball.on = None;
                         }
                     },
+                    // What it lay on went, as the dock putting itself away: it falls.
+                    None if ball.center.y > ground + 4.0 => {
+                        ball.resting = false;
+                        moved = true;
+                    }
                     None => {
                         // Riding up and down with the drift.
                         let next = ball.center.y + (ground - ball.center.y) * (dt * 5.0).min(1.0);
@@ -361,6 +401,35 @@ mod tests {
         let snowman = simulation.snowmen()[0];
         assert!((snowman.anchor.x - bottom.center.x).abs() < 0.5 && (snowman.size - bottom.radius).abs() < 0.5);
         assert!(snowman.radii[1] < 1.0 && snowman.radii[2] < snowman.radii[1] + 0.5);
+    }
+
+    #[test]
+    fn snow_on_the_docks_shelf_makes_balls_that_stand_on_it() {
+        use crate::geometry::Rect;
+        use crate::simulation::WindowSurface;
+        use std::collections::HashSet;
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.0);
+        let dock = WindowSurface {
+            id: 7,
+            frame: Rect { x: 300.0, y: 0.0, width: 600.0, height: 70.0 },
+            blockers: Vec::new(),
+            cover: Vec::new(),
+            corner_radius: 0.0,
+            corner_exponent: 2.0,
+        };
+        simulation.update_windows(&[dock], 0.1, &HashSet::new(), &HashSet::new(), false);
+        simulation.shelf = Some(7);
+        let li = simulation.shelf_layer().expect("the shelf's layer");
+        for i in 0..simulation.layers[li].count() {
+            simulation.layers[li].set(i, 10.0);
+        }
+        let boxes = simulation.scoop_boxes(30.0);
+        assert!(boxes.iter().any(|b| b[0] >= 299.0 && b[2] <= 901.0 && b[3] > 75.0), "{boxes:?}");
+        simulation.scoop_snowball(V2::new(600.0, 78.0)).expect("a ball from the dock's snow");
+        simulation.release_snowball();
+        run(&mut simulation, 1.0);
+        let ball = simulation.snowballs()[0];
+        assert!(ball.center.y > 70.0, "on the dock, not behind it: {}", ball.center.y);
     }
 
     #[test]

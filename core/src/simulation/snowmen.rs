@@ -107,7 +107,7 @@ impl SnowSimulation {
     /// is shallower.
     fn snowman_target(&self, share: f32, radius: f32) -> f32 {
         let x = self.width * share;
-        let layer = &self.layers[0];
+        let layer = &self.layers[self.standing_layer(x, radius)];
         let floor = layer.floor(layer.clamped_index(x));
         let (from, to) = (layer.clamped_index(x - radius * 0.6), layer.clamped_index(x + radius * 0.6));
         let surface = (from..=to).map(|i| layer.surface(i)).sum::<f32>() / (to - from + 1) as f32;

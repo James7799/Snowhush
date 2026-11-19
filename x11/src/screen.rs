@@ -284,9 +284,10 @@ impl Screen {
             .iter()
             .map(|b| pixel(b[0] as f64 - 4.0, b[1] as f64 - 4.0, b[2] as f64 + 4.0, b[3] as f64 + 4.0))
             .collect();
-        let drift = self.simulation.drift_top() as f64;
-        if scoop && drift > 1.0 {
-            rects.push(pixel(0.0, 0.0, self.size.0 as f64, drift + 30.0));
+        if scoop {
+            for b in self.simulation.scoop_boxes(30.0) {
+                rects.push(pixel(b[0] as f64, b[1] as f64, b[2] as f64, b[3] as f64));
+            }
         }
         if rects != self.input {
             x.set_input(self.window, &rects);
