@@ -379,7 +379,8 @@ impl App {
             return Some(chores);
         }
         let frame = self.screens.iter().map(|screen| screen.next_due.saturating_duration_since(now)).min();
-        Some(frame.map_or(chores, |frame| frame.min(chores)))
+        // The X connection isn't watched by the loop: a Ctrl or a press on a snowball is seen within this.
+        Some(frame.map_or(chores, |frame| frame.min(chores)).min(Duration::from_millis(50)))
     }
 
     fn tick(&mut self) -> Result<(), String> {
@@ -471,7 +472,10 @@ impl App {
             self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall_held(false));
         }
         self.pass_snow(now);
-        let scoop = self.shared.modifiers() & crate::xlib::CONTROL != 0 && self.settings.ground;
+        // Asked here, each frame, rather than of the window source's thread: a press right after Ctrl goes down must
+        // already find the drift taking the pointer.
+        let held = self.x.pointer().map_or(self.shared.modifiers(), |p| p.3);
+        let scoop = held & crate::xlib::CONTROL != 0 && self.settings.ground;
         let x = &self.x;
         self.screens.iter_mut().for_each(|screen| screen.update_input(x, scoop));
         if reshaped {

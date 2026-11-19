@@ -12,7 +12,10 @@ use crate::geometry::V2;
 /// A ball's radius when scooped, and the most it grows to by rolling, in points.
 const START: f32 = 13.0;
 const LARGEST: f32 = 46.0;
-const SMALLEST: f32 = 7.0;
+/// A scoop where little snow lies still makes a ball this big, to be rolled into a bigger one.
+const SMALLEST: f32 = 8.0;
+/// How far either side of the pointer a scoop gathers snow from.
+const SCOOP_REACH: f32 = 40.0;
 /// How deep a ball on the ground sits in the drift, as a share of its radius.
 const SUNK: f32 = 0.35;
 /// How much of the radius two stacked balls overlap by.
@@ -20,6 +23,11 @@ const STACK: f32 = 0.85;
 const GRAVITY: f32 = 1500.0;
 /// At most this many balls lie about at once.
 const MOST: usize = 12;
+/// How far above the drift the held ball may be and still roll along it, as a share of its radius: the drift sinks
+/// under it as it takes the snow, and a hand dragging sideways drifts up and down.
+const ROLL_REACH: f32 = 0.9;
+/// How much snow rolling takes: square points per point rolled, per point of the ball's diameter.
+const GATHER: f32 = 0.9;
 
 pub(super) struct Ball {
     id: u64,
@@ -65,15 +73,14 @@ impl SnowSimulation {
             return None;
         }
         let layer = &self.layers[0];
-        let i = layer.clamped_index(point.x);
-        if point.y > layer.surface(i) + 20.0 || layer.surface(i) - layer.floor(i) < 2.0 {
+        let (from, to) = (layer.clamped_index(point.x - SCOOP_REACH), layer.clamped_index(point.x + SCOOP_REACH));
+        let deepest = (from..=to).map(|i| layer.surface(i) - layer.floor(i)).fold(0.0, f32::max);
+        let top = (from..=to).map(|i| layer.surface(i)).fold(0.0, f32::max);
+        if point.y > top + 30.0 || deepest < 1.0 {
             return None;
         }
-        let taken = self.take_drift_snow(point.x, START * 2.0, PI * START * START);
-        let radius = (taken / PI).sqrt();
-        if radius < SMALLEST {
-            return None;
-        }
+        let taken = self.take_drift_snow(point.x, SCOOP_REACH, PI * START * START);
+        let radius = (taken / PI).sqrt().max(SMALLEST);
         let surface = self.drift_surface(point.x, radius);
         let id = self.snowballs.next;
         self.snowballs.next += 1;
@@ -113,14 +120,14 @@ impl SnowSimulation {
         let mut to = point + offset;
         to.x = to.x.clamp(radius, (self.width - radius).max(radius));
         let ground = self.drift_surface(to.x, radius) + radius * (1.0 - SUNK);
-        let rolling = to.y <= ground + 2.0;
+        let rolling = to.y <= ground + (radius * ROLL_REACH).max(6.0);
         if rolling {
             to.y = ground;
         }
         let dx = to.x - from.x;
         let mut grown = radius;
         if rolling && dx.abs() > 0.5 && radius < LARGEST {
-            let want = 2.0 * radius * dx.abs() * 0.6;
+            let want = 2.0 * radius * dx.abs() * GATHER;
             let taken = self.take_drift_snow((from.x + to.x) / 2.0, radius + dx.abs() / 2.0, want);
             grown = (radius * radius + taken / PI).sqrt().min(LARGEST);
         }
@@ -354,6 +361,32 @@ mod tests {
         let snowman = simulation.snowmen()[0];
         assert!((snowman.anchor.x - bottom.center.x).abs() < 0.5 && (snowman.size - bottom.radius).abs() < 0.5);
         assert!(snowman.radii[1] < 1.0 && snowman.radii[2] < snowman.radii[1] + 0.5);
+    }
+
+    #[test]
+    fn a_thin_drift_still_gives_a_small_ball() {
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.0);
+        assert!(simulation.scoop_snowball(V2::new(300.0, 2.0)).is_none(), "no snow, no ball");
+        for i in 0..simulation.layers[0].count() {
+            simulation.layers[0].set(i, 3.0);
+        }
+        simulation.scoop_snowball(V2::new(300.0, 2.0)).expect("a ball from thin snow");
+        assert!(simulation.snowballs()[0].radius >= 8.0);
+    }
+
+    #[test]
+    fn a_ball_rolled_along_a_shallow_drift_grows_though_the_hand_is_a_little_high() {
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.0);
+        for i in 0..simulation.layers[0].count() {
+            simulation.layers[0].set(i, 12.0);
+        }
+        simulation.scoop_snowball(V2::new(200.0, 8.0)).expect("a ball");
+        let small = simulation.snowballs()[0].radius;
+        for k in 1..=100 {
+            simulation.drag_snowball(V2::new(200.0 + k as f32 * 6.0, 8.0 + (k % 3) as f32 * 3.0), DT);
+        }
+        let big = simulation.snowballs()[0].radius;
+        assert!(big > small * 1.4, "{small} -> {big}");
     }
 
     #[test]

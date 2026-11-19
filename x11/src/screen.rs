@@ -51,8 +51,9 @@ pub struct Screen {
     scale: f64,
     /// Where the overlay last took the pointer, in its pixels: the snowballs, and the drift while Ctrl is held.
     input: Vec<(i32, i32, u32, u32)>,
-    /// When the held snowball was last dragged.
+    /// When the held snowball was last dragged, and where to, on the shared desktop.
     dragged_at: Option<Instant>,
+    dragged_to: (f32, f32),
     surface: Option<Surface>,
     /// Space left free at the display's edges, top, right, bottom, left: the panels the work area leaves out.
     margins: (i32, i32, i32, i32),
@@ -116,6 +117,7 @@ impl Screen {
             scale,
             input: Vec::new(),
             dragged_at: None,
+            dragged_to: (0.0, 0.0),
             surface: None,
             margins: (0, 0, 0, 0),
             shelf: None,
@@ -283,8 +285,8 @@ impl Screen {
             .map(|b| pixel(b[0] as f64 - 4.0, b[1] as f64 - 4.0, b[2] as f64 + 4.0, b[3] as f64 + 4.0))
             .collect();
         let drift = self.simulation.drift_top() as f64;
-        if scoop && drift > 2.0 {
-            rects.push(pixel(0.0, 0.0, self.size.0 as f64, drift + 16.0));
+        if scoop && drift > 1.0 {
+            rects.push(pixel(0.0, 0.0, self.size.0 as f64, drift + 30.0));
         }
         if rects != self.input {
             x.set_input(self.window, &rects);
@@ -296,6 +298,7 @@ impl Screen {
     /// is taken hold of, or with `scoop` a new one is scooped out of the drift. Returns whether one is held.
     pub fn press(&mut self, x: f32, y: f32, scoop: bool) -> bool {
         let at = self.local(x, y);
+        log!("{}: pressed at {:.0},{:.0} (overlay {:.0},{:.0}), scoop {scoop}", self.name, x, y, at.x, at.y);
         let held = match self.simulation.snowball_at(at) {
             Some(id) => {
                 self.simulation.grab_snowball(id, at);
@@ -306,6 +309,7 @@ impl Screen {
         };
         if held {
             self.dragged_at = Some(Instant::now());
+            self.dragged_to = (x, y);
             self.wake(Instant::now());
         }
         held
@@ -318,6 +322,7 @@ impl Screen {
         let now = Instant::now();
         let dt = self.dragged_at.map_or(1.0 / 60.0, |at| (now - at).as_secs_f32().clamp(1.0 / 240.0, 0.1));
         self.dragged_at = Some(now);
+        self.dragged_to = (x, y);
         let at = self.local(x, y);
         self.simulation.drag_snowball(at, dt);
         self.wake(now);
@@ -325,6 +330,13 @@ impl Screen {
 
     pub fn release(&mut self) {
         if self.simulation.holding_snowball() {
+            // A hand that stopped before letting go throws nothing: X sends no motion while the pointer rests.
+            if let Some(at) = self.dragged_at
+                && at.elapsed() > Duration::from_millis(60)
+            {
+                let (x, y) = self.dragged_to;
+                self.simulation.drag_snowball(self.local(x, y), at.elapsed().as_secs_f32().min(0.1));
+            }
             self.simulation.release_snowball();
             self.wake(Instant::now());
         }
