@@ -27,6 +27,8 @@ const PUMPKIN_FRAGMENT: &str = include_str!("../../linux/src/shaders/pumpkin.fra
 /// The X11 port's own: snowmen, drawn from their age alone.
 const SNOWMAN_VERTEX: &str = include_str!("shaders/snowman.vert");
 const SNOWMAN_FRAGMENT: &str = include_str!("shaders/snowman.frag");
+const SNOWBALL_VERTEX: &str = include_str!("shaders/snowball.vert");
+const SNOWBALL_FRAGMENT: &str = include_str!("shaders/snowball.frag");
 const FIELD_FRAGMENT: &str = include_str!("../../linux/src/shaders/field.frag");
 const GLASS_VERTEX: &str = include_str!("../../linux/src/shaders/glass.vert");
 const GLASS_FRAGMENT: &str = include_str!("../../linux/src/shaders/glass.frag");
@@ -104,6 +106,7 @@ pub struct Gpu {
     sign: Program,
     pumpkin: Program,
     snowman: Program,
+    snowball: Program,
     fade: Program,
     /// Drops on the glass: their bumps added up into a field, and the glass drawn from it.
     field: Program,
@@ -265,8 +268,10 @@ impl Gpu {
                 &gl,
                 SNOWMAN_VERTEX,
                 SNOWMAN_FRAGMENT,
-                &["viewSize", "shake", "anchor", "size", "age", "fade", "seed", "light", "panel"],
+                &["viewSize", "shake", "anchor", "size", "radii", "age", "fade", "seed", "light", "panel"],
             )?;
+            let snowball =
+                program(&gl, SNOWBALL_VERTEX, SNOWBALL_FRAGMENT, &["viewSize", "shake", "center", "radius", "roll", "light", "panel"])?;
 
             let fade = program(&gl, FADE_VERTEX, FADE_FRAGMENT, &[])?;
 
@@ -325,6 +330,7 @@ impl Gpu {
                 sign,
                 pumpkin,
                 snowman,
+                snowball,
                 fade,
                 field,
                 glass,
@@ -405,6 +411,7 @@ impl Gpu {
             self.load_sign(sign.caption);
         }
         let snowmen = simulation.snowmen();
+        let snowballs = simulation.snowballs();
         let pumpkins = simulation.pumpkins();
         if !pumpkins.is_empty() {
             self.load_pumpkin();
@@ -477,9 +484,26 @@ impl Gpu {
                 for standing in &snowmen {
                     gl.uniform_2_f32(snowman.location("anchor"), standing.anchor.x, standing.anchor.y);
                     gl.uniform_1_f32(snowman.location("size"), standing.size);
+                    gl.uniform_3_f32_slice(snowman.location("radii"), &standing.radii);
                     gl.uniform_1_f32(snowman.location("age"), standing.age);
                     gl.uniform_1_f32(snowman.location("fade"), standing.fade);
                     gl.uniform_1_f32(snowman.location("seed"), standing.seed);
+                    gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                }
+            }
+            // Snowballs made by hand, also before the drift: one lying in it is half buried.
+            if !snowballs.is_empty() {
+                let ball = &self.snowball;
+                gl.use_program(Some(ball.program));
+                gl.bind_vertex_array(Some(self.empty_array));
+                gl.uniform_2_f32_slice(ball.location("viewSize"), &view);
+                gl.uniform_2_f32_slice(ball.location("shake"), &shake);
+                gl.uniform_4_f32_slice(ball.location("light"), &light);
+                gl.uniform_4_f32_slice(ball.location("panel"), &panel);
+                for one in &snowballs {
+                    gl.uniform_2_f32(ball.location("center"), one.center.x, one.center.y);
+                    gl.uniform_1_f32(ball.location("radius"), one.radius);
+                    gl.uniform_1_f32(ball.location("roll"), one.roll);
                     gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
                 }
             }
@@ -730,7 +754,7 @@ impl Drop for Gpu {
         if self.egl.make_current(self.display, None, None, Some(self.context)).is_ok() {
             let gl = &self.gl;
             unsafe {
-                for program in [&self.sprite, &self.pile, &self.sign, &self.pumpkin, &self.snowman, &self.fade, &self.field, &self.glass] {
+                for program in [&self.sprite, &self.pile, &self.sign, &self.pumpkin, &self.snowman, &self.snowball, &self.fade, &self.field, &self.glass] {
                     gl.delete_program(program.program);
                 }
                 gl.delete_vertex_array(self.sprite_array);

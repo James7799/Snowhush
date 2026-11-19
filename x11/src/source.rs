@@ -1,7 +1,7 @@
 //! Where the other windows are: on X11 the window manager's EWMH properties tell (xsource.rs), and end in the
 //! same report the Wayland compositors' sources give (copied from linux/src/source.rs, sources swapped).
 
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -109,6 +109,8 @@ const LOOK: Duration = Duration::from_millis(100);
 /// What the compositor last told, read by the snow loop at each frame.
 pub struct Shared {
     cursor: AtomicU64,
+    /// The modifier keys and buttons held, as the X server last said (Xlib's state mask).
+    modifiers: AtomicU32,
     report: Mutex<(u64, Option<Arc<Report>>)>,
     started_moving: Mutex<bool>,
     /// Wakes the snow loop at once, for the first report and when a drag starts.
@@ -122,6 +124,7 @@ impl Shared {
     pub fn new(wake: Ping) -> Shared {
         Shared {
             cursor: AtomicU64::new(pack(-1e6, -1e6)),
+            modifiers: AtomicU32::new(0),
             report: Mutex::new((0, None)),
             started_moving: Mutex::new(false),
             wake,
@@ -183,6 +186,14 @@ impl Shared {
 
     pub fn set_cursor(&self, x: f32, y: f32) {
         self.cursor.store(pack(x, y), Ordering::Relaxed);
+    }
+
+    pub fn modifiers(&self) -> u32 {
+        self.modifiers.load(Ordering::Relaxed)
+    }
+
+    pub fn set_modifiers(&self, state: u32) {
+        self.modifiers.store(state, Ordering::Relaxed);
     }
 
     /// The latest report and its generation, which goes up with each one.

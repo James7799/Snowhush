@@ -22,11 +22,18 @@ The snow physics (`core/`) and every Linux module that does not touch Wayland ar
 
 ## Snowmen
 
-**⛄ Build a Snowman** in the tray menu builds one on the display under the pointer, at most three per display: the
-bottom ball rolls in along the drift, the middle one and the head drop onto it, then coal eyes, a smile and buttons,
-a carrot nose, a red scarf and twig arms. It stands in the drift (`core/src/simulation/snowmen.rs`), which lies over
-the windows, so a window does not hide it; Clear Snow knocks it over and it crumbles. It is drawn procedurally,
-with no pictures, by `src/shaders/snowman.frag`.
+**Build one by hand**, as in the video of Tymor (a Mac app): **Ctrl + drag** in the drift along the bottom scoops up
+a snowball; dragged along the drift it rolls and grows, taking the snow it rolls over. Let go, it falls and sits in
+the drift. Drag a ball (no Ctrl needed: a ball takes the click itself) over another and let go: it lands on top.
+Three stacked become a snowman with the balls' own sizes: coal eyes, a smile and buttons, a carrot nose, a red
+scarf, twig arms and a black top hat. Grabbing a ball under another drops the one on top.
+
+**⛄ Build a Snowman** in the tray menu builds one by itself on the display under the pointer.
+
+Snowmen and balls stand in the drift (`core/src/simulation/snowballs.rs`, `snowmen.rs`), which lies over the
+windows, so a window does not hide them; Clear Snow takes the balls and knocks the snowmen over. They are drawn
+procedurally, with no pictures (`src/shaders/snowman.frag`, `snowball.frag`). The overlay takes the pointer only
+over the balls, and over the drift while Ctrl is held; everywhere else every click goes through.
 
 Not on X11: Show in Screenshots (the snow always shows in them), and Behind Windows (the overlay is always above
 the windows; over full-screen apps it fades out unless Show over Full Screen is on).

@@ -23,6 +23,26 @@ pub struct X {
     atoms: HashMap<String, xlib::Atom>,
 }
 
+/// A button press, a drag or a release on one of our overlays, in root coordinates.
+#[derive(Clone, Copy, Debug)]
+pub struct Pointer {
+    pub window: Window,
+    pub kind: PointerKind,
+    pub x: i32,
+    pub y: i32,
+    /// The modifier keys and buttons held (Xlib's state mask).
+    pub state: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PointerKind {
+    Press,
+    Drag,
+    Release,
+}
+
+pub const CONTROL: u32 = xlib::ControlMask;
+
 /// A display as RandR's monitors give it, in the X server's pixels.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Monitor {
@@ -234,9 +254,24 @@ impl X {
             (self.xlib.XChangeProperty)(self.display, window, bypass, xlib::XA_CARDINAL, 32, xlib::PropModeReplace, (&never as *const c_ulong).cast(), 1);
             let kind = notification as c_ulong;
             (self.xlib.XChangeProperty)(self.display, window, net_type, xlib::XA_ATOM, 32, xlib::PropModeReplace, (&kind as *const c_ulong).cast(), 1);
+            // Only where the input shape lets the pointer in (snowballs, the drift while Ctrl is held): presses there
+            // and the drags that follow them come here.
+            (self.xlib.XSelectInput)(self.display, window, xlib::ButtonPressMask | xlib::ButtonReleaseMask | xlib::Button1MotionMask);
             (self.xlib.XMapRaised)(self.display, window);
             (self.xlib.XFlush)(self.display);
             window
+        }
+    }
+
+    /// Where the overlay takes the pointer, in its own pixels; nowhere for none.
+    pub fn set_input(&self, window: Window, rects: &[(i32, i32, u32, u32)]) {
+        let mut list: Vec<xlib::XRectangle> =
+            rects.iter().map(|r| xlib::XRectangle { x: r.0 as i16, y: r.1 as i16, width: r.2 as u16, height: r.3 as u16 }).collect();
+        unsafe {
+            let region = (self.xfixes.XFixesCreateRegion)(self.display, list.as_mut_ptr(), list.len() as c_int);
+            (self.xfixes.XFixesSetWindowShapeRegion)(self.display, window, SHAPE_INPUT, 0, 0, region);
+            (self.xfixes.XFixesDestroyRegion)(self.display, region);
+            (self.xlib.XFlush)(self.display);
         }
     }
 
@@ -258,9 +293,11 @@ impl X {
         }
     }
 
-    /// Takes every event waiting, without blocking; returns whether the displays changed.
-    pub fn drain(&self, randr_base: c_int) -> bool {
+    /// Takes every event waiting, without blocking: whether the displays changed, and the pointer on the overlays
+    /// (of a run of drags, only the last).
+    pub fn drain(&self, randr_base: c_int) -> (bool, Vec<Pointer>) {
         let mut changed = false;
+        let mut pointer: Vec<Pointer> = Vec::new();
         unsafe {
             while (self.xlib.XPending)(self.display) > 0 {
                 let mut event: xlib::XEvent = std::mem::zeroed();
@@ -269,10 +306,31 @@ impl X {
                 if kind >= randr_base && kind <= randr_base + x11_dl::xrandr::RRNotify {
                     (self.xrandr.XRRUpdateConfiguration)(&mut event);
                     changed = true;
+                    continue;
+                }
+                let next = match kind {
+                    xlib::ButtonPress | xlib::ButtonRelease if event.button.button == xlib::Button1 => {
+                        let b = event.button;
+                        let kind = if kind == xlib::ButtonPress { PointerKind::Press } else { PointerKind::Release };
+                        Pointer { window: b.window, kind, x: b.x_root, y: b.y_root, state: b.state }
+                    }
+                    xlib::MotionNotify => {
+                        let m = event.motion;
+                        Pointer { window: m.window, kind: PointerKind::Drag, x: m.x_root, y: m.y_root, state: m.state }
+                    }
+                    _ => continue,
+                };
+                if next.kind == PointerKind::Drag
+                    && let Some(last) = pointer.last_mut()
+                    && last.kind == PointerKind::Drag
+                {
+                    *last = next;
+                } else {
+                    pointer.push(next);
                 }
             }
         }
-        changed
+        (changed, pointer)
     }
 
     pub fn randr_event_base(&self) -> c_int {
@@ -348,12 +406,12 @@ impl X {
         }
     }
 
-    /// The pointer in root coordinates, and whether a mouse button is held.
-    pub fn pointer(&self) -> Option<(i32, i32, bool)> {
+    /// The pointer in root coordinates, whether a mouse button is held, and the modifier keys and buttons held.
+    pub fn pointer(&self) -> Option<(i32, i32, bool, u32)> {
         unsafe {
             let (mut root, mut child, mut rx, mut ry, mut wx, mut wy, mut mask) = (0, 0, 0, 0, 0, 0, 0);
             let ok = (self.xlib.XQueryPointer)(self.display, self.root, &mut root, &mut child, &mut rx, &mut ry, &mut wx, &mut wy, &mut mask);
-            (ok != 0).then_some((rx, ry, mask & (xlib::Button1Mask | xlib::Button2Mask | xlib::Button3Mask) != 0))
+            (ok != 0).then_some((rx, ry, mask & (xlib::Button1Mask | xlib::Button2Mask | xlib::Button3Mask) != 0, mask))
         }
     }
 

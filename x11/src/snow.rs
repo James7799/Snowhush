@@ -200,7 +200,7 @@ pub fn run() -> Result<(), String> {
         tray.shutdown().wait();
     }
     for screen in app.screens.drain(..) {
-        screen.release(&app.gpu, &app.x);
+        screen.close(&app.gpu, &app.x);
     }
     result
 }
@@ -384,9 +384,11 @@ impl App {
 
     fn tick(&mut self) -> Result<(), String> {
         let now = Instant::now();
-        if self.x.drain(self.randr_base) {
+        let (displays_changed, pointer) = self.x.drain(self.randr_base);
+        if displays_changed {
             self.displays_changed_at = Some(now);
         }
+        self.handle_pointer(&pointer);
         let report = self.shared.report();
         if report.0 != self.report.0 {
             if let Some(next) = &report.1
@@ -469,12 +471,36 @@ impl App {
             self.screens.iter_mut().for_each(|screen| screen.simulation.set_snowfall_held(false));
         }
         self.pass_snow(now);
+        let scoop = self.shared.modifiers() & crate::xlib::CONTROL != 0 && self.settings.ground;
+        let x = &self.x;
+        self.screens.iter_mut().for_each(|screen| screen.update_input(x, scoop));
         if reshaped {
             self.place_screens();
         }
         self.tell_demand();
         self.stats.report(Instant::now());
         Ok(())
+    }
+
+    /// Presses, drags and releases of the left button on the overlays: snowballs taken hold of and carried, or scooped
+    /// out of the drift with Ctrl held (the X11 port's own).
+    fn handle_pointer(&mut self, events: &[crate::xlib::Pointer]) {
+        use crate::xlib::PointerKind;
+        let scale = self.scale as f32;
+        for event in events {
+            let Some(screen) = self.screens.iter_mut().find(|screen| screen.window() == event.window) else { continue };
+            let (x, y) = (event.x as f32 / scale, event.y as f32 / scale);
+            match event.kind {
+                PointerKind::Press => {
+                    let scoop = event.state & crate::xlib::CONTROL != 0;
+                    if screen.press(x, y, scoop) {
+                        log!("{}: a snowball is held", screen.name);
+                    }
+                }
+                PointerKind::Drag => screen.drag(x, y),
+                PointerKind::Release => screen.release(),
+            }
+        }
     }
 
     /// Tells the compositor's sources what the snow needs: nothing while no display shows it, the windows now and then
@@ -559,7 +585,7 @@ impl App {
         }
         for screen in current {
             log!("display {} gone", screen.name);
-            screen.release(&self.gpu, &self.x);
+            screen.close(&self.gpu, &self.x);
         }
         self.place_screens();
     }

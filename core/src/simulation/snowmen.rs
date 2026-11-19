@@ -15,6 +15,13 @@ const SPOTS: [(f32, f32); 3] = [(0.78, 30.0), (0.24, 26.0), (0.52, 28.0)];
 pub const SNOWMAN_BUILT: f32 = 3.6;
 /// Seconds a knocked-over snowman takes to crumble away.
 const CRUMBLE: f32 = 0.7;
+/// Where the building is when three balls stacked by hand become a snowman: the balls are in place, the face and the
+/// rest are still to come.
+const STACKED: f32 = 2.75;
+/// A snowman's middle ball and head as shares of its bottom ball, when built from the menu.
+const PROPORTIONS: [f32; 3] = [1.0, 0.70, 0.48];
+/// At most this many stand on a screen, built from the menu or by hand.
+const MOST: usize = 6;
 /// A snowman's height as a share of its bottom ball's radius, top of the head to its foot.
 pub const SNOWMAN_HEIGHT: f32 = 3.9;
 
@@ -25,7 +32,12 @@ pub(super) struct Snowmen {
 }
 
 struct Snowman {
-    spot: usize,
+    /// The menu's spot it stands at, or none for one stacked by hand.
+    spot: Option<usize>,
+    /// Where it stands, as a share of the screen's width, and its bottom ball's radius and proportions.
+    share: f32,
+    radius: f32,
+    radii: [f32; 3],
     /// Where its foot rests, easing after the drift under it.
     bottom: f32,
     age: f32,
@@ -36,13 +48,27 @@ struct Snowman {
 impl SnowSimulation {
     /// Builds a snowman at the next free spot; false when all three are taken.
     pub fn build_snowman(&mut self) -> bool {
-        let Some(spot) = (0..SPOTS.len()).find(|&spot| !self.snowmen.standing.iter().any(|s| s.spot == spot)) else {
+        if self.snowmen.standing.len() >= MOST {
+            return false;
+        }
+        let Some(spot) = (0..SPOTS.len()).find(|&spot| !self.snowmen.standing.iter().any(|s| s.spot == Some(spot))) else {
             return false;
         };
-        let bottom = self.snowman_target(spot);
-        self.snowmen.standing.push(Snowman { spot, bottom, age: 0.0, knocked: None });
+        let (share, radius) = SPOTS[spot];
+        let bottom = self.snowman_target(share, radius);
+        self.snowmen.standing.push(Snowman { spot: Some(spot), share, radius, radii: PROPORTIONS, bottom, age: 0.0, knocked: None });
         self.snowmen.moved = true;
         true
+    }
+
+    /// Three balls stacked by hand become a snowman standing where they are, its foot at `foot`.
+    pub(super) fn stand_snowman(&mut self, x: f32, foot: f32, radius: f32, radii: [f32; 3]) {
+        if self.snowmen.standing.len() >= MOST {
+            self.snowmen.standing.remove(0);
+        }
+        let share = (x / self.width.max(1.0)).clamp(0.0, 1.0);
+        self.snowmen.standing.push(Snowman { spot: None, share, radius, radii, bottom: foot, age: STACKED, knocked: None });
+        self.snowmen.moved = true;
     }
 
     /// The snowmen to draw, before the snow so the drift covers their feet.
@@ -51,11 +77,12 @@ impl SnowSimulation {
             .standing
             .iter()
             .map(|s| SnowmanSprite {
-                anchor: V2::new(self.width * SPOTS[s.spot].0, s.bottom),
-                size: SPOTS[s.spot].1,
+                anchor: V2::new(self.width * s.share, s.bottom),
+                size: s.radius,
+                radii: s.radii,
                 age: s.age,
                 fade: s.knocked.map_or(1.0, |t| (1.0 - t / CRUMBLE).max(0.0)),
-                seed: s.spot as f32,
+                seed: s.share * 7.0,
             })
             .collect()
     }
@@ -78,8 +105,7 @@ impl SnowSimulation {
 
     /// Where a snowman's foot belongs: a third of its bottom ball down in the drift, or on the ground where the drift
     /// is shallower.
-    fn snowman_target(&self, spot: usize) -> f32 {
-        let (share, radius) = SPOTS[spot];
+    fn snowman_target(&self, share: f32, radius: f32) -> f32 {
         let x = self.width * share;
         let layer = &self.layers[0];
         let floor = layer.floor(layer.clamped_index(x));
@@ -92,7 +118,7 @@ impl SnowSimulation {
         if self.snowmen.standing.is_empty() {
             return;
         }
-        let targets: Vec<f32> = self.snowmen.standing.iter().map(|s| self.snowman_target(s.spot)).collect();
+        let targets: Vec<f32> = self.snowmen.standing.iter().map(|s| self.snowman_target(s.share, s.radius)).collect();
         let mut moved = false;
         for (s, target) in self.snowmen.standing.iter_mut().zip(targets) {
             if s.age < SNOWMAN_BUILT {

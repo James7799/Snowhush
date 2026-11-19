@@ -11,12 +11,14 @@ mod ghosts;
 mod neighbours;
 mod pumpkins;
 mod rain;
+mod snowballs;
 mod snowmen;
 
 use ghosts::Haunting;
 pub use neighbours::{Borrowed, Carried, Caught, Mapping, Stray};
 use pumpkins::Pumpkins;
 use rain::Rain;
+use snowballs::Snowballs;
 use snowmen::Snowmen;
 pub use snowmen::{SNOWMAN_BUILT, SNOWMAN_HEIGHT};
 
@@ -222,9 +224,19 @@ pub struct PumpkinSprite {
 pub struct SnowmanSprite {
     pub anchor: V2,
     pub size: f32,
+    /// The bottom ball, the middle one and the head, as shares of `size`.
+    pub radii: [f32; 3],
     pub age: f32,
     pub fade: f32,
     pub seed: f32,
+}
+
+/// A snowball made by hand: its centre, radius and how far it has turned as it rolled.
+#[derive(Clone, Copy, Debug)]
+pub struct SnowballSprite {
+    pub center: V2,
+    pub radius: f32,
+    pub roll: f32,
 }
 
 /// A bit of something that crumbles into snow, such as a window: it keeps its colour for a moment while it falls.
@@ -475,6 +487,7 @@ pub struct SnowSimulation {
     haunting: Haunting,
     lanterns: Pumpkins,
     snowmen: Snowmen,
+    snowballs: Snowballs,
     /// Snow on windows that reach over here from a neighbouring display, which keeps it.
     borrowed: Vec<Borrowed>,
     borrowed_changed: bool,
@@ -521,6 +534,7 @@ impl SnowSimulation {
             haunting: Haunting::new(),
             lanterns: Pumpkins::default(),
             snowmen: Snowmen::default(),
+            snowballs: Snowballs::default(),
             borrowed: Vec::new(),
             borrowed_changed: false,
             caught: Vec::new(),
@@ -707,6 +721,7 @@ impl SnowSimulation {
             && self.parking.is_empty()
             && self.next_mode.is_none()
             && !self.has_snowmen()
+            && !self.has_snowballs()
             && self.layers.iter().all(|layer| layer.top <= 0.0)
     }
 
@@ -832,6 +847,7 @@ impl SnowSimulation {
         if self.haunting.on {
             self.settle_pumpkins(dt);
         }
+        self.tend_snowballs(dt);
         self.tend_snowmen(dt);
         for (area, x, blend) in self.air.overflow.drain(..) {
             if self.ground_settles {
@@ -848,7 +864,8 @@ impl SnowSimulation {
         let pushed = air.clock - air.last_window_motion < 0.6
             || air.clock - air.last_cursor_push < 0.3
             || air.gust.is_some()
-            || self.haunting.pushing(air.clock);
+            || self.haunting.pushing(air.clock)
+            || self.snowballs_busy();
         // The steady trickle off window corners is a few tiny grains at a time; they read fine at the calm rate.
         let flying = air.grains.len() > 24 || air.clock < self.scattered_until || air.slide_wind.abs() > 20.0 || self.snowmen_busy();
         self.pace = if pushed {
@@ -865,6 +882,7 @@ impl SnowSimulation {
             || self.air.windows_changed
             || self.lanterns.moved
             || self.snowmen.moved
+            || self.snowballs.moved
             || self.restyled
             || self.borrowed_changed;
         self.restyled = false;
@@ -872,6 +890,7 @@ impl SnowSimulation {
         self.borrowed_changed = false;
         self.lanterns.moved = false;
         self.snowmen.moved = false;
+        self.snowballs.moved = false;
         changed
     }
 
@@ -1568,6 +1587,7 @@ impl SnowSimulation {
         let direction = if direction < 0.0 { -1.0 } else { 1.0 };
         self.air.gust = Some(Gust { start: self.air.clock, direction, calm });
         self.knock_snowmen();
+        self.snowballs.clear();
         // Snow kept for windows on other desktops goes too, out of sight.
         self.dormant.clear();
         for (_, ledge, _) in &mut self.parking {

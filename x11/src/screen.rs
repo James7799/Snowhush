@@ -49,6 +49,10 @@ pub struct Screen {
     window: xlib::Window,
     /// X server pixels per logical pixel.
     scale: f64,
+    /// Where the overlay last took the pointer, in its pixels: the snowballs, and the drift while Ctrl is held.
+    input: Vec<(i32, i32, u32, u32)>,
+    /// When the held snowball was last dragged.
+    dragged_at: Option<Instant>,
     surface: Option<Surface>,
     /// Space left free at the display's edges, top, right, bottom, left: the panels the work area leaves out.
     margins: (i32, i32, i32, i32),
@@ -110,6 +114,8 @@ impl Screen {
             bounds,
             window,
             scale,
+            input: Vec::new(),
+            dragged_at: None,
             surface: None,
             margins: (0, 0, 0, 0),
             shelf: None,
@@ -252,6 +258,77 @@ impl Screen {
     /// its own, which GNOME's desktop icons already are. Over or under full-screen apps is the fade's business.
     pub fn set_layer(&mut self, _behind: bool, _over_full_screen: bool) {
         self.resume();
+    }
+
+    pub fn window(&self) -> xlib::Window {
+        self.window
+    }
+
+    /// Lets the pointer in where there is something to take hold of: each snowball, and with `scoop` (Ctrl held) the
+    /// drift along the bottom too, where a drag scoops up a new ball. Everywhere else every click goes through.
+    pub fn update_input(&mut self, x: &X, scoop: bool) {
+        if self.window == 0 {
+            return;
+        }
+        let (scale, height) = (self.scale, self.size.1 as f64);
+        let pixel = |left: f64, bottom: f64, right: f64, top: f64| {
+            let (x0, y0) = ((left * scale).floor() as i32, ((height - top) * scale).floor() as i32);
+            let (x1, y1) = ((right * scale).ceil() as i32, ((height - bottom) * scale).ceil() as i32);
+            (x0.max(0), y0.max(0), (x1 - x0.max(0)).max(1) as u32, (y1 - y0.max(0)).max(1) as u32)
+        };
+        let mut rects: Vec<(i32, i32, u32, u32)> = self
+            .simulation
+            .snowball_boxes()
+            .iter()
+            .map(|b| pixel(b[0] as f64 - 4.0, b[1] as f64 - 4.0, b[2] as f64 + 4.0, b[3] as f64 + 4.0))
+            .collect();
+        let drift = self.simulation.drift_top() as f64;
+        if scoop && drift > 2.0 {
+            rects.push(pixel(0.0, 0.0, self.size.0 as f64, drift + 16.0));
+        }
+        if rects != self.input {
+            x.set_input(self.window, &rects);
+            self.input = rects;
+        }
+    }
+
+    /// The left button went down at this point on the shared desktop, inside the overlay's input: a snowball there
+    /// is taken hold of, or with `scoop` a new one is scooped out of the drift. Returns whether one is held.
+    pub fn press(&mut self, x: f32, y: f32, scoop: bool) -> bool {
+        let at = self.local(x, y);
+        let held = match self.simulation.snowball_at(at) {
+            Some(id) => {
+                self.simulation.grab_snowball(id, at);
+                true
+            }
+            None if scoop => self.simulation.scoop_snowball(at).is_some(),
+            None => false,
+        };
+        if held {
+            self.dragged_at = Some(Instant::now());
+            self.wake(Instant::now());
+        }
+        held
+    }
+
+    pub fn drag(&mut self, x: f32, y: f32) {
+        if !self.simulation.holding_snowball() {
+            return;
+        }
+        let now = Instant::now();
+        let dt = self.dragged_at.map_or(1.0 / 60.0, |at| (now - at).as_secs_f32().clamp(1.0 / 240.0, 0.1));
+        self.dragged_at = Some(now);
+        let at = self.local(x, y);
+        self.simulation.drag_snowball(at, dt);
+        self.wake(now);
+    }
+
+    pub fn release(&mut self) {
+        if self.simulation.holding_snowball() {
+            self.simulation.release_snowball();
+            self.wake(Instant::now());
+        }
+        self.dragged_at = None;
     }
 
     /// Back on top, as after another override-redirect window (a menu) came up over it.
@@ -574,7 +651,7 @@ impl Screen {
         V2::new(x - area.x as f32, (area.bottom() as f32) - y)
     }
 
-    pub fn release(mut self, gpu: &Gpu, x: &X) {
+    pub fn close(mut self, gpu: &Gpu, x: &X) {
         if let Some(surface) = self.surface.take() {
             gpu.release(surface);
         }

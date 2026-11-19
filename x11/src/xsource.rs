@@ -87,9 +87,10 @@ fn run(mut x: X, shared: Arc<Shared>, scale: f64) {
             overview = open;
         }
         let pointer = x.pointer();
-        if pointer_wanted && let Some((px, py, _)) = pointer {
+        if pointer_wanted && let Some((px, py, _, _)) = pointer {
             shared.set_cursor((px as f64 / scale) as f32, (py as f64 / scale) as f32);
         }
+        shared.set_modifiers(pointer.map_or(0, |p| p.3));
         let pressed = pointer.is_some_and(|p| p.2);
         let dragging = moved_at.is_some_and(|at| now - at < SETTLE);
         let due = asked_at.is_none_or(|at| now - at >= REFRESH) || (dragging && demand == Demand::Live);
