@@ -16,6 +16,12 @@ use crate::source::Report;
 use crate::windows::{self, Area, Shelf};
 use crate::xlib::{self, X};
 
+/// What the hand holds as it carries it onto another display.
+pub enum Held {
+    Ball(snowhush_core::simulation::CarriedBall),
+    Snowman(snowhush_core::simulation::CarriedSnowman),
+}
+
 /// How much the snow may spend on drawing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PowerBudget {
@@ -282,6 +288,7 @@ impl Screen {
             .simulation
             .snowball_boxes()
             .iter()
+            .chain(self.simulation.snowman_boxes().iter())
             .map(|b| pixel(b[0] as f64 - 4.0, b[1] as f64 - 4.0, b[2] as f64 + 4.0, b[3] as f64 + 4.0))
             .collect();
         if scoop {
@@ -300,13 +307,14 @@ impl Screen {
     pub fn press(&mut self, x: f32, y: f32, scoop: bool) -> bool {
         let at = self.local(x, y);
         log!("{}: pressed at {:.0},{:.0} (overlay {:.0},{:.0}), scoop {scoop}", self.name, x, y, at.x, at.y);
-        let held = match self.simulation.snowball_at(at) {
-            Some(id) => {
-                self.simulation.grab_snowball(id, at);
-                true
-            }
-            None if scoop => self.simulation.scoop_snowball(at).is_some(),
-            None => false,
+        let held = if let Some(id) = self.simulation.snowball_at(at) {
+            self.simulation.grab_snowball(id, at);
+            true
+        } else if let Some(id) = self.simulation.snowman_at(at) {
+            self.simulation.grab_snowman(id, at);
+            true
+        } else {
+            scoop && self.simulation.scoop_snowball(at).is_some()
         };
         if held {
             self.dragged_at = Some(Instant::now());
@@ -316,8 +324,12 @@ impl Screen {
         held
     }
 
+    pub fn holding(&self) -> bool {
+        self.simulation.holding_snowball() || self.simulation.holding_snowman()
+    }
+
     pub fn drag(&mut self, x: f32, y: f32) {
-        if !self.simulation.holding_snowball() {
+        if !self.holding() {
             return;
         }
         let now = Instant::now();
@@ -325,37 +337,53 @@ impl Screen {
         self.dragged_at = Some(now);
         self.dragged_to = (x, y);
         let at = self.local(x, y);
-        self.simulation.drag_snowball(at, dt);
+        self.drag_held(at, dt);
         self.wake(now);
     }
 
-    /// The held ball, for the display the pointer crossed into, with when it was last dragged.
-    pub fn hand_over_ball(&mut self) -> Option<(snowhush_core::simulation::CarriedBall, Option<Instant>)> {
-        let ball = self.simulation.take_held_snowball()?;
-        self.wake(Instant::now());
-        Some((ball, self.dragged_at.take()))
+    fn drag_held(&mut self, at: V2, dt: f32) {
+        if self.simulation.holding_snowball() {
+            self.simulation.drag_snowball(at, dt);
+        } else {
+            self.simulation.drag_snowman(at, dt);
+        }
     }
 
-    /// A ball carried in from the display with overlay `from`, still in the hand.
-    pub fn take_ball(&mut self, ball: snowhush_core::simulation::CarriedBall, from: Area, dragged_at: Option<Instant>) {
+    /// What the hand holds, for the display the pointer crossed into, with when it was last dragged.
+    pub fn hand_over(&mut self) -> Option<(Held, Option<Instant>)> {
+        let held = match self.simulation.take_held_snowball() {
+            Some(ball) => Held::Ball(ball),
+            None => Held::Snowman(self.simulation.take_held_snowman()?),
+        };
+        self.wake(Instant::now());
+        Some((held, self.dragged_at.take()))
+    }
+
+    /// A ball or snowman carried in from the display with overlay `from`, still in the hand.
+    pub fn take_held(&mut self, held: Held, from: Area, dragged_at: Option<Instant>) {
         let here = self.area();
         // Overlay coordinates run right and up from each overlay's bottom left.
         let shift = V2::new((from.x - here.x) as f32, (here.bottom() - from.bottom()) as f32);
-        self.simulation.adopt_held_snowball(ball, shift);
+        match held {
+            Held::Ball(ball) => self.simulation.adopt_held_snowball(ball, shift),
+            Held::Snowman(snowman) => self.simulation.adopt_held_snowman(snowman, shift),
+        }
         self.dragged_at = dragged_at;
         self.wake(Instant::now());
     }
 
     pub fn release(&mut self) {
-        if self.simulation.holding_snowball() {
+        if self.holding() {
             // A hand that stopped before letting go throws nothing: X sends no motion while the pointer rests.
             if let Some(at) = self.dragged_at
                 && at.elapsed() > Duration::from_millis(60)
             {
                 let (x, y) = self.dragged_to;
-                self.simulation.drag_snowball(self.local(x, y), at.elapsed().as_secs_f32().min(0.1));
+                let point = self.local(x, y);
+                self.drag_held(point, at.elapsed().as_secs_f32().min(0.1));
             }
             self.simulation.release_snowball();
+            self.simulation.release_snowman();
             self.wake(Instant::now());
         }
         self.dragged_at = None;

@@ -27,12 +27,17 @@ The snow physics (`core/`) and every Linux module that does not touch Wayland ar
 a snowball; dragged along the drift it rolls and grows, taking the snow it rolls over. Let go, it falls and sits in
 the drift. Drag a ball (no Ctrl needed: a ball takes the click itself) over another and let go: it lands on top.
 Three stacked become a snowman with the balls' own sizes: coal eyes, a smile and buttons, a carrot nose, a red
-scarf, twig arms and a black top hat. Grabbing a ball under another drops the one on top.
+scarf, twig arms and a black top hat. Grabbing a ball under another drops the one on top. A ball or a snowman
+can be carried from one display to another.
+
+A snowman can be picked up and carried too: set down gently it stands where it is put; dropped from a height it
+breaks into lumps and powder that heap up where they land. Clear Snow breaks each snowman (and ball) as the gust
+reaches it and blows the pieces away with the snow; a calm clear (reduced motion) melts them.
 
 **⛄ Build a Snowman** in the tray menu builds one by itself on the display under the pointer.
 
 Snowmen and balls stand in the drift (`core/src/simulation/snowballs.rs`, `snowmen.rs`), which lies over the
-windows, so a window does not hide them; Clear Snow takes the balls and knocks the snowmen over. They are drawn
+windows, so a window does not hide them. They are drawn
 procedurally, with no pictures (`src/shaders/snowman.frag`, `snowball.frag`). Over the dock they stand in the
 snow lying on it.
 

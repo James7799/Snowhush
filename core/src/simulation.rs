@@ -21,7 +21,7 @@ use rain::Rain;
 use snowballs::Snowballs;
 pub use snowballs::CarriedBall;
 use snowmen::Snowmen;
-pub use snowmen::{SNOWMAN_BUILT, SNOWMAN_HEIGHT};
+pub use snowmen::{CarriedSnowman, SNOWMAN_BUILT, SNOWMAN_HEIGHT};
 
 pub type WindowId = isize;
 
@@ -1587,8 +1587,8 @@ impl SnowSimulation {
     pub fn blow_away(&mut self, direction: f32, calm: bool) {
         let direction = if direction < 0.0 { -1.0 } else { 1.0 };
         self.air.gust = Some(Gust { start: self.air.clock, direction, calm });
-        self.knock_snowmen();
-        self.snowballs.clear();
+        self.knock_snowmen(calm);
+        self.break_snowballs(direction, calm);
         // Snow kept for windows on other desktops goes too, out of sight.
         self.dormant.clear();
         for (_, ledge, _) in &mut self.parking {

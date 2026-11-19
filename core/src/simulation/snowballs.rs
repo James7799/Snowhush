@@ -8,6 +8,7 @@ use std::f32::consts::PI;
 
 use super::{SnowSimulation, SnowballSprite};
 use crate::geometry::V2;
+use crate::layer::Blend;
 
 /// A ball's radius when scooped, and the most it grows to by rolling, in points.
 const START: f32 = 13.0;
@@ -60,14 +61,6 @@ pub(super) struct Snowballs {
     pub(super) moved: bool,
 }
 
-impl Snowballs {
-    pub(super) fn clear(&mut self) {
-        self.moved |= !self.balls.is_empty();
-        self.balls.clear();
-        self.pointer = None;
-    }
-}
-
 impl SnowSimulation {
     /// The ball under `point`, the front one where they overlap.
     pub fn snowball_at(&self, point: V2) -> Option<u64> {
@@ -97,6 +90,24 @@ impl SnowSimulation {
         self.snowballs.pointer = Some((point, V2::ZERO));
         self.snowballs.moved = true;
         Some(id)
+    }
+
+    /// Clearing the snow: a gust breaks the balls into lumps and powder it blows away with the rest; a calm clear
+    /// melts them where they are.
+    pub(super) fn break_snowballs(&mut self, direction: f32, calm: bool) {
+        let balls = std::mem::take(&mut self.snowballs.balls);
+        self.snowballs.pointer = None;
+        self.snowballs.moved |= !balls.is_empty();
+        if calm {
+            return;
+        }
+        for b in balls {
+            let velocity = V2::new(direction * self.air.random.range(500.0, 900.0), self.air.random.range(120.0, 260.0));
+            let area = PI * b.radius * b.radius * 0.8;
+            self.air.throw_lump(area * 0.6, b.center, velocity);
+            self.air.release(area * 0.4, Blend::SNOW, 0.0, b.center, velocity, V2::new(b.radius, b.radius) * 0.8, 0.3);
+        }
+        self.scattered_until = self.scattered_until.max(self.air.clock + 1.5);
     }
 
     /// Takes hold of a ball; whatever was stacked on it falls.
