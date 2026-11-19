@@ -73,16 +73,19 @@ impl SnowSimulation {
         if self.snowballs.balls.len() >= MOST {
             return None;
         }
-        let layer = &self.layers[self.standing_layer(point.x, 0.0)];
+        // Snow on the ground, on the dock or on top of a window: whichever lies under the click; a click down in the
+        // snow counts as on it.
+        let (li, _) = self.surface_under(point.x, 0.0, point.y + 15.0);
+        let layer = &self.layers[li];
         let (from, to) = (layer.clamped_index(point.x - SCOOP_REACH), layer.clamped_index(point.x + SCOOP_REACH));
         let deepest = (from..=to).map(|i| layer.surface(i) - layer.floor(i)).fold(0.0, f32::max);
         let top = (from..=to).map(|i| layer.surface(i)).fold(0.0, f32::max);
         if point.y > top + 30.0 || deepest < 1.0 {
             return None;
         }
-        let taken = self.take_drift_snow(point.x, SCOOP_REACH, PI * START * START);
+        let taken = self.take_drift_snow(li, point.x, SCOOP_REACH, PI * START * START);
         let radius = (taken / PI).sqrt().max(SMALLEST);
-        let surface = self.drift_surface(point.x, radius);
+        let surface = self.avg_surface(li, point.x, radius * 0.5);
         let id = self.snowballs.next;
         self.snowballs.next += 1;
         let center = V2::new(point.x, surface + radius * (1.0 - SUNK));
@@ -138,8 +141,10 @@ impl SnowSimulation {
         };
         let mut to = point + offset;
         to.x = to.x.clamp(radius, (self.width - radius).max(radius));
-        let ground = self.drift_surface(to.x, radius) + radius * (1.0 - SUNK);
-        let rolling = to.y <= ground + (radius * ROLL_REACH).max(6.0);
+        let reach = (radius * ROLL_REACH).max(6.0);
+        let (under, surface) = self.surface_under(to.x, radius * 0.5, from.y.min(to.y) - radius * (1.0 - SUNK) + 6.0);
+        let ground = surface + radius * (1.0 - SUNK);
+        let rolling = to.y <= ground + reach;
         if rolling {
             to.y = ground;
         }
@@ -147,7 +152,7 @@ impl SnowSimulation {
         let mut grown = radius;
         if rolling && dx.abs() > 0.5 && radius < LARGEST {
             let want = 2.0 * radius * dx.abs() * GATHER;
-            let taken = self.take_drift_snow((from.x + to.x) / 2.0, radius + dx.abs() / 2.0, want);
+            let taken = self.take_drift_snow(under, (from.x + to.x) / 2.0, radius + dx.abs() / 2.0, want);
             grown = (radius * radius + taken / PI).sqrt().min(LARGEST);
         }
         let b = &mut self.snowballs.balls[index];
@@ -245,14 +250,38 @@ impl SnowSimulation {
         if ground > 1.0 {
             boxes.push([0.0, 0.0, self.width, ground + above]);
         }
-        if let Some(li) = self.shelf_layer() {
-            let layer = &self.layers[li];
-            let top = (0..layer.count()).map(|i| layer.surface(i)).fold(layer.base().y, f32::max);
-            if top > layer.base().y + 1.0 {
-                boxes.push([layer.base().x, layer.base().y, layer.base().x + layer.width(), top + above]);
+        // The dock's shelf and the tops of windows.
+        for layer in &self.layers[1..] {
+            let floor = (0..layer.count()).map(|i| layer.floor(i)).fold(f32::MAX, f32::min);
+            let top = (0..layer.count()).map(|i| layer.surface(i)).fold(f32::MIN, f32::max);
+            if layer.count() > 0 && top > floor + 1.0 && floor < self.height {
+                boxes.push([layer.base().x, floor - 4.0, layer.base().x + layer.width(), top + above]);
             }
         }
         boxes
+    }
+
+    /// What lies under `x`, `half` wide either side, at or below `y`: the highest snow surface there of the ground,
+    /// the dock's shelf and the tops of windows, as a layer and its average surface.
+    pub(super) fn surface_under(&self, x: f32, half: f32, y: f32) -> (usize, f32) {
+        let mut best = (0, self.avg_surface(0, x, half));
+        for li in 1..self.layers.len() {
+            let layer = &self.layers[li];
+            if layer.count() == 0 || x < layer.base().x || x > layer.base().x + layer.width() {
+                continue;
+            }
+            let surface = self.avg_surface(li, x, half);
+            if surface <= y + 2.0 && surface > best.1 {
+                best = (li, surface);
+            }
+        }
+        best
+    }
+
+    pub(super) fn avg_surface(&self, li: usize, x: f32, half: f32) -> f32 {
+        let layer = &self.layers[li];
+        let (from, to) = (layer.clamped_index(x - half), layer.clamped_index(x + half));
+        (from..=to).map(|i| layer.surface(i)).sum::<f32>() / (to - from + 1) as f32
     }
 
     /// The panel's shelf, as a layer, if there is one.
@@ -271,17 +300,10 @@ impl SnowSimulation {
             .unwrap_or(0)
     }
 
-    /// The drift's surface under a ball of this radius at `x`: the average across its middle.
-    fn drift_surface(&self, x: f32, radius: f32) -> f32 {
-        let layer = &self.layers[self.standing_layer(x, radius * 0.5)];
-        let (from, to) = (layer.clamped_index(x - radius * 0.5), layer.clamped_index(x + radius * 0.5));
-        (from..=to).map(|i| layer.surface(i)).sum::<f32>() / (to - from + 1) as f32
-    }
 
     /// Takes up to `area` square points of snow from the drift within `half` of `x`, evenly as deep as it is;
     /// returns how much it took.
-    fn take_drift_snow(&mut self, x: f32, half: f32, area: f32) -> f32 {
-        let li = self.standing_layer(x, 0.0);
+    fn take_drift_snow(&mut self, li: usize, x: f32, half: f32, area: f32) -> f32 {
         let layer = &mut self.layers[li];
         let width = layer.column_width;
         let (from, to) = (layer.clamped_index(x - half), layer.clamped_index(x + half));
@@ -319,7 +341,7 @@ impl SnowSimulation {
                 .filter(|o| (o.center.x - center.x).abs() < o.radius * 0.7)
                 .map(|o| (o.id, o.center.y + (o.radius + radius) * STACK, o.center.x))
                 .max_by(|a, b| a.1.total_cmp(&b.1));
-            let ground = self.drift_surface(center.x, radius) + radius * (1.0 - SUNK);
+            let ground = self.surface_under(center.x, radius * 0.5, center.y - radius * (1.0 - SUNK) + 2.0).1 + radius * (1.0 - SUNK);
             let ball = &mut self.snowballs.balls[k];
             if ball.resting {
                 match ball.on {
@@ -483,6 +505,39 @@ mod tests {
         run(&mut simulation, 1.0);
         let ball = simulation.snowballs()[0];
         assert!(ball.center.y > 70.0, "on the dock, not behind it: {}", ball.center.y);
+    }
+
+    #[test]
+    fn snow_on_a_windows_top_makes_a_ball_that_stays_there_and_falls_when_it_goes() {
+        use crate::geometry::Rect;
+        use crate::simulation::WindowSurface;
+        use std::collections::HashSet;
+        let mut simulation = SnowSimulation::new(1200.0, 800.0, 0.0);
+        for i in 0..simulation.layers[0].count() {
+            simulation.layers[0].set(i, 10.0);
+        }
+        let window = WindowSurface {
+            id: 9,
+            frame: Rect { x: 200.0, y: 300.0, width: 600.0, height: 300.0 },
+            blockers: Vec::new(),
+            cover: Vec::new(),
+            corner_radius: 0.0,
+            corner_exponent: 2.0,
+        };
+        simulation.update_windows(&[window], 0.1, &HashSet::new(), &HashSet::new(), false);
+        let li = (1..simulation.layers.len()).find(|&li| simulation.layers[li].count() > 0).expect("the window's ledge");
+        for i in 0..simulation.layers[li].count() {
+            simulation.layers[li].set(i, 12.0);
+        }
+        assert!(simulation.scoop_boxes(30.0).iter().any(|b| b[1] > 290.0 && b[3] > 610.0));
+        simulation.scoop_snowball(V2::new(500.0, 608.0)).expect("a ball from the window's top");
+        simulation.release_snowball();
+        run(&mut simulation, 1.0);
+        let ball = simulation.snowballs()[0];
+        assert!(ball.center.y > 600.0, "on the window, not fallen: {}", ball.center.y);
+        simulation.update_windows(&[], 0.1, &HashSet::new(), &HashSet::new(), false);
+        run(&mut simulation, 2.0);
+        assert!(simulation.snowballs()[0].center.y < 100.0, "fell when the window went");
     }
 
     #[test]

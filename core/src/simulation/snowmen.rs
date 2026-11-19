@@ -190,7 +190,7 @@ impl SnowSimulation {
         let mut foot = point + offset;
         foot.x = foot.x.clamp(radius, (self.width - radius).max(radius));
         let share = foot.x / self.width.max(1.0);
-        let ground = self.snowman_target(share, radius);
+        let ground = self.snowman_on(share, radius, foot.y);
         let s = &mut self.snowmen.standing[k];
         s.share = share;
         s.bottom = foot.y.max(ground);
@@ -274,6 +274,14 @@ impl SnowSimulation {
         (surface - radius * 0.35).max(floor)
     }
 
+    /// Where a snowman's foot belongs on whatever lies under it at `bottom`: a third of its bottom ball down in the snow.
+    fn snowman_on(&self, share: f32, radius: f32, bottom: f32) -> f32 {
+        let x = self.width * share;
+        let (li, surface) = self.surface_under(x, radius * 0.6, bottom + radius * 0.35 + 2.0);
+        let layer = &self.layers[li];
+        (surface - radius * 0.35).max(layer.floor(layer.clamped_index(x)))
+    }
+
     pub(super) fn tend_snowmen(&mut self, dt: f32) {
         if self.snowmen.standing.is_empty() {
             return;
@@ -289,7 +297,14 @@ impl SnowSimulation {
                 self.break_snowman(k, velocity);
             }
         }
-        let targets: Vec<f32> = self.snowmen.standing.iter().map(|s| self.snowman_target(s.share, s.radius)).collect();
+        // One from the menu stands where the menu put it; one carried or stacked by hand stands on whatever is under
+        // it, the top of a window too.
+        let targets: Vec<f32> = self
+            .snowmen
+            .standing
+            .iter()
+            .map(|s| if s.spot.is_some() { self.snowman_target(s.share, s.radius) } else { self.snowman_on(s.share, s.radius, s.bottom) })
+            .collect();
         let mut moved = false;
         let mut broken = Vec::new();
         let width = self.width;
@@ -320,6 +335,12 @@ impl SnowSimulation {
                         s.falling = None;
                     }
                 }
+                continue;
+            }
+            // What it stood on went, as a window closing under it: it falls.
+            if target < s.bottom - 6.0 {
+                s.falling = Some(V2::ZERO);
+                moved = true;
                 continue;
             }
             let next = s.bottom + (target - s.bottom) * (dt * 5.0).min(1.0);
