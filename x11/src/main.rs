@@ -18,7 +18,6 @@ mod screen;
 mod snow;
 #[allow(dead_code)]
 mod source;
-#[path = "../../linux/src/tray.rs"]
 mod tray;
 #[path = "../../linux/src/windows.rs"]
 mod windows;

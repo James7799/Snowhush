@@ -59,6 +59,8 @@ pub enum Command {
     Backdrops(Vec<Shade>),
     /// The desktop turned light or dark.
     Light(bool),
+    /// A snowman is built on the display under the pointer (the X11 port's own).
+    BuildSnowman,
     Quit,
 }
 
@@ -345,6 +347,22 @@ impl App {
                 self.screens.iter_mut().for_each(|screen| screen.simulation.set_density(density(budget)));
             }
             Command::Backdrops(shades) => self.screens.iter_mut().for_each(|screen| screen.update_backdrop(&shades)),
+            Command::BuildSnowman => {
+                let (x, y) = self.shared.cursor();
+                let under = self.screens.iter().position(|screen| {
+                    let b = &screen.bounds;
+                    (x as f64) >= b.x && (x as f64) < b.right() && (y as f64) >= b.y && (y as f64) < b.bottom()
+                });
+                let now = Instant::now();
+                // The one under the pointer first, then any other with room for one more.
+                let order: Vec<usize> = under.into_iter().chain(0..self.screens.len()).collect();
+                if let Some(&index) = order.iter().find(|&&index| self.screens[index].simulation.build_snowman()) {
+                    let screen = &mut self.screens[index];
+                    log!("{}: a snowman is built", screen.name);
+                    screen.resume();
+                    screen.wake(now);
+                }
+            }
             Command::Light(light) => {
                 if let Some(tray) = &self.tray {
                     tray.update(|tray| tray.light = light);

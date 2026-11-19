@@ -18,6 +18,15 @@ The snow physics (`core/`) and every Linux module that does not touch Wayland ar
 | `render.rs` | `linux/src/render.rs` with EGL on the X11 platform, a config whose native visual is 32-bit ARGB, and surfaces on X windows |
 | `source.rs` | `linux/src/source.rs` with the compositor sources swapped for `xsource` |
 | `kwin.rs` | Only the single-instance D-Bus name and the `Slide` type |
+| `tray.rs` | `linux/src/tray.rs` with **⛄ Build a Snowman** added |
+
+## Snowmen
+
+**⛄ Build a Snowman** in the tray menu builds one on the display under the pointer, at most three per display: the
+bottom ball rolls in along the drift, the middle one and the head drop onto it, then coal eyes, a smile and buttons,
+a carrot nose, a red scarf and twig arms. It stands in the drift (`core/src/simulation/snowmen.rs`), which lies over
+the windows, so a window does not hide it; Clear Snow knocks it over and it crumbles. It is drawn procedurally,
+with no pictures, by `src/shaders/snowman.frag`.
 
 Not on X11: Show in Screenshots (the snow always shows in them), and Behind Windows (the overlay is always above
 the windows; over full-screen apps it fades out unless Show over Full Screen is on).
