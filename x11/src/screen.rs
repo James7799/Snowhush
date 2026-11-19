@@ -329,6 +329,23 @@ impl Screen {
         self.wake(now);
     }
 
+    /// The held ball, for the display the pointer crossed into, with when it was last dragged.
+    pub fn hand_over_ball(&mut self) -> Option<(snowhush_core::simulation::CarriedBall, Option<Instant>)> {
+        let ball = self.simulation.take_held_snowball()?;
+        self.wake(Instant::now());
+        Some((ball, self.dragged_at.take()))
+    }
+
+    /// A ball carried in from the display with overlay `from`, still in the hand.
+    pub fn take_ball(&mut self, ball: snowhush_core::simulation::CarriedBall, from: Area, dragged_at: Option<Instant>) {
+        let here = self.area();
+        // Overlay coordinates run right and up from each overlay's bottom left.
+        let shift = V2::new((from.x - here.x) as f32, (here.bottom() - from.bottom()) as f32);
+        self.simulation.adopt_held_snowball(ball, shift);
+        self.dragged_at = dragged_at;
+        self.wake(Instant::now());
+    }
+
     pub fn release(&mut self) {
         if self.simulation.holding_snowball() {
             // A hand that stopped before letting go throws nothing: X sends no motion while the pointer rests.

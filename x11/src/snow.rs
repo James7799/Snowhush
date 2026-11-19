@@ -492,17 +492,35 @@ impl App {
         use crate::xlib::PointerKind;
         let scale = self.scale as f32;
         for event in events {
-            let Some(screen) = self.screens.iter_mut().find(|screen| screen.window() == event.window) else { continue };
             let (x, y) = (event.x as f32 / scale, event.y as f32 / scale);
             match event.kind {
                 PointerKind::Press => {
+                    let Some(screen) = self.screens.iter_mut().find(|screen| screen.window() == event.window) else { continue };
                     let scoop = event.state & crate::xlib::CONTROL != 0;
                     if screen.press(x, y, scoop) {
                         log!("{}: a snowball is held", screen.name);
                     }
                 }
-                PointerKind::Drag => screen.drag(x, y),
-                PointerKind::Release => screen.release(),
+                // The drag keeps coming to the overlay that took the press, wherever the pointer goes: a ball carried
+                // onto another display goes over to that one's snow.
+                PointerKind::Drag => {
+                    let Some(holder) = self.screens.iter().position(|screen| screen.simulation.holding_snowball()) else { continue };
+                    let under = self.screens.iter().position(|screen| {
+                        let b = &screen.bounds;
+                        (x as f64) >= b.x && (x as f64) < b.right() && (y as f64) >= b.y && (y as f64) < b.bottom()
+                    });
+                    let mut now_holding = holder;
+                    if let Some(next) = under.filter(|&next| next != holder) {
+                        let from = self.screens[holder].area();
+                        if let Some((ball, at)) = self.screens[holder].hand_over_ball() {
+                            self.screens[next].take_ball(ball, from, at);
+                            log!("a snowball goes from {} to {}", self.screens[holder].name, self.screens[next].name);
+                            now_holding = next;
+                        }
+                    }
+                    self.screens[now_holding].drag(x, y);
+                }
+                PointerKind::Release => self.screens.iter_mut().for_each(|screen| screen.release()),
             }
         }
     }

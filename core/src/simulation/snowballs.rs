@@ -43,6 +43,14 @@ pub(super) struct Ball {
     on: Option<u64>,
 }
 
+/// A ball in the hand, on its way to another display's simulation.
+pub struct CarriedBall {
+    center: V2,
+    radius: f32,
+    roll: f32,
+    offset: V2,
+}
+
 #[derive(Default)]
 pub(super) struct Snowballs {
     balls: Vec<Ball>,
@@ -164,6 +172,40 @@ impl SnowSimulation {
             .iter()
             .map(|b| [b.center.x - b.radius, b.center.y - b.radius, b.center.x + b.radius, b.center.y + b.radius])
             .collect()
+    }
+
+    /// Lets the held ball go to another display, still in the hand, as the pointer crosses into it.
+    pub fn take_held_snowball(&mut self) -> Option<CarriedBall> {
+        let index = self.snowballs.balls.iter().position(|b| b.held.is_some())?;
+        let b = self.snowballs.balls.remove(index);
+        for other in &mut self.snowballs.balls {
+            if other.on == Some(b.id) {
+                other.resting = false;
+                other.on = None;
+            }
+        }
+        self.snowballs.pointer = None;
+        self.snowballs.moved = true;
+        Some(CarriedBall { center: b.center, radius: b.radius, roll: b.roll, offset: b.held.unwrap_or(V2::ZERO) })
+    }
+
+    /// Takes a ball carried in from another display, `shift` from its coordinates to these.
+    pub fn adopt_held_snowball(&mut self, ball: CarriedBall, shift: V2) {
+        let id = self.snowballs.next;
+        self.snowballs.next += 1;
+        let center = ball.center + shift;
+        self.snowballs.balls.push(Ball {
+            id,
+            center,
+            radius: ball.radius,
+            velocity: V2::ZERO,
+            roll: ball.roll,
+            held: Some(ball.offset),
+            resting: false,
+            on: None,
+        });
+        self.snowballs.pointer = Some((center - ball.offset, V2::ZERO));
+        self.snowballs.moved = true;
     }
 
     pub fn holding_snowball(&self) -> bool {

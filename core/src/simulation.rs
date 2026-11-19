@@ -19,6 +19,7 @@ pub use neighbours::{Borrowed, Carried, Caught, Mapping, Stray};
 use pumpkins::Pumpkins;
 use rain::Rain;
 use snowballs::Snowballs;
+pub use snowballs::CarriedBall;
 use snowmen::Snowmen;
 pub use snowmen::{SNOWMAN_BUILT, SNOWMAN_HEIGHT};
 
